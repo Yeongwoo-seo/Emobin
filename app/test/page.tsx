@@ -1,271 +1,136 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
-import { useRouter } from "next/navigation";
-import { useEmobinStore } from "@/lib/store";
-import type { AnalysisResult, ChatMessage, ProfileBounds } from "@/lib/types";
-import {
-  fileToDataUrl,
-  dataUrlToBase64,
-  getMimeFromDataUrl,
-  cropProfileCircle,
-  resizeImage,
-  createBlurredBackground,
-} from "@/lib/imageUtils";
-import { v4 as uuidv4 } from "uuid";
+import { fileToDataUrl, dataUrlToBase64, getMimeFromDataUrl, resizeImage, loadImage } from "@/lib/imageUtils";
+import type { AnalysisResult } from "@/lib/types";
+import type { BackgroundExtractionResult, Region } from "@/app/api/extract-background/route";
 
-/* ─────────────────────────────────────────
-   Mini KakaoTalk Chat Preview (self-contained)
-───────────────────────────────────────── */
-function MiniChatBubble({
-  msg,
-  profileImg,
-  name,
-  showProfile,
-  showName,
-}: {
-  msg: ChatMessage;
-  profileImg: string | null;
-  name: string;
-  showProfile: boolean;
-  showName: boolean;
-}) {
-  const isMe = msg.sender === "me";
-  return (
-    <div
-      className={`flex items-end gap-1.5 mb-0.5 ${isMe ? "flex-row-reverse" : "flex-row"}`}
-    >
-      {/* Profile pic area (other only) */}
-      <div className="w-8 flex-shrink-0 self-end mb-1">
-        {!isMe && showProfile && (
-          <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 border border-gray-300">
-            {profileImg ? (
-              <img src={profileImg} alt={name} className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full bg-gray-400 flex items-center justify-center">
-                <span className="text-white text-[10px]">?</span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+/* ── Canvas: 말풍선/UI 영역 제거 후 배경만 남기기 ── */
+async function removeRegions(
+  dataUrl: string,
+  regions: Region[],
+  bgColor: string
+): Promise<string> {
+  const img = await loadImage(dataUrl);
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
 
-      <div
-        className={`flex flex-col max-w-[65%] ${isMe ? "items-end" : "items-start"}`}
-      >
-        {!isMe && showName && (
-          <span className="text-[10px] text-gray-600 font-medium mb-0.5 ml-0.5">
-            {name}
-          </span>
-        )}
-        <div className={`flex items-end gap-1 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-          <div
-            className={`px-2.5 py-1.5 text-[12px] leading-snug break-words ${
-              isMe
-                ? "bg-[#FFEB33] text-gray-900"
-                : "bg-white text-gray-900 shadow-sm"
-            }`}
-            style={{
-              borderRadius: isMe ? "14px 14px 3px 14px" : "14px 14px 14px 3px",
-            }}
-          >
-            {msg.text}
-          </div>
-          <div
-            className={`flex flex-col gap-0 pb-0.5 flex-shrink-0 ${
-              isMe ? "items-end" : "items-start"
-            }`}
-          >
-            {(msg.unreadCount ?? 0) > 0 && (
-              <span className="text-[9px] text-[#FFEB33] font-bold leading-none">
-                {msg.unreadCount}
-              </span>
-            )}
-            <span className="text-[9px] text-gray-400 leading-none whitespace-nowrap">
-              {msg.time}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0);
 
-function KakaoPreview({
-  name,
-  messages,
-  profileImg,
-  bgColor,
-  bgDataUrl,
-}: {
-  name: string;
-  messages: ChatMessage[];
-  profileImg: string | null;
-  bgColor: string;
-  bgDataUrl: string | null;
-}) {
-  // Group messages by consecutive sender
-  const groups: ChatMessage[][] = [];
-  let cur: ChatMessage[] = [];
-  let curSender: string | null = null;
-  for (const m of messages) {
-    if (m.sender !== curSender) {
-      if (cur.length) groups.push(cur);
-      cur = [m];
-      curSender = m.sender;
-    } else {
-      cur.push(m);
-    }
+  for (const r of regions) {
+    const rx = Math.floor(r.x * W);
+    const ry = Math.floor(r.y * H);
+    const rw = Math.ceil(r.w * W);
+    const rh = Math.ceil(r.h * H);
+
+    // Sample pixels just above and below the region for smooth blend
+    const topY = Math.max(0, ry - 8);
+    const botY = Math.min(H - 1, ry + rh + 8);
+    const midX = Math.min(W - 1, rx + Math.floor(rw / 2));
+
+    const topPx = ctx.getImageData(midX, topY, 1, 1).data;
+    const botPx = ctx.getImageData(midX, botY, 1, 1).data;
+
+    // Decide fill: if sampled pixels look like background, gradient between them
+    // Otherwise fall back to bgColor
+    const parsedBg = hexToRgb(bgColor) ?? { r: 178, g: 199, b: 217 };
+
+    const tR = topPx[3] > 10 ? topPx[0] : parsedBg.r;
+    const tG = topPx[3] > 10 ? topPx[1] : parsedBg.g;
+    const tB = topPx[3] > 10 ? topPx[2] : parsedBg.b;
+    const bR = botPx[3] > 10 ? botPx[0] : parsedBg.r;
+    const bG = botPx[3] > 10 ? botPx[1] : parsedBg.g;
+    const bB = botPx[3] > 10 ? botPx[2] : parsedBg.b;
+
+    const grad = ctx.createLinearGradient(rx, ry, rx, ry + rh);
+    grad.addColorStop(0, `rgb(${tR},${tG},${tB})`);
+    grad.addColorStop(1, `rgb(${bR},${bG},${bB})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(rx, ry, rw, rh);
   }
-  if (cur.length) groups.push(cur);
 
+  // Light blur pass over removed areas using a simple box blur
+  // (Create a second canvas with blur and composite only removed area)
+  const blurCanvas = document.createElement("canvas");
+  blurCanvas.width = W;
+  blurCanvas.height = H;
+  const blurCtx = blurCanvas.getContext("2d")!;
+  blurCtx.filter = "blur(3px)";
+  blurCtx.drawImage(canvas, 0, 0);
+  blurCtx.filter = "none";
+
+  // Re-draw over removed regions with blurred version for smooth edges
+  for (const r of regions) {
+    const rx = Math.floor(r.x * W);
+    const ry = Math.floor(r.y * H);
+    const rw = Math.ceil(r.w * W);
+    const rh = Math.ceil(r.h * H);
+    const blurData = blurCtx.getImageData(rx, ry, rw, rh);
+    ctx.putImageData(blurData, rx, ry);
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
+function hexToRgb(hex: string) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m
+    ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) }
+    : null;
+}
+
+/* ── Status Badge ── */
+function Badge({ status }: { status: "idle" | "loading" | "ok" | "error" }) {
+  const map = {
+    idle: "bg-gray-700 text-gray-400",
+    loading: "bg-yellow-900/50 text-yellow-300 animate-pulse",
+    ok: "bg-green-900/50 text-green-300",
+    error: "bg-red-900/50 text-red-300",
+  };
+  const labels = { idle: "대기중", loading: "처리중...", ok: "완료", error: "실패" };
   return (
-    <div
-      className="rounded-xl overflow-hidden border border-gray-600"
-      style={{ maxWidth: 320, width: "100%" }}
-    >
-      {/* Status bar */}
-      <div className="bg-[#F5F5F5] px-3 py-1 flex justify-between items-center">
-        <span className="text-[10px] font-semibold text-gray-700">9:41</span>
-        <div className="flex items-center gap-1">
-          <div className="w-4 h-2 border border-gray-500 rounded-sm flex items-center px-px">
-            <div className="w-2.5 h-1 bg-gray-500 rounded-sm" />
-          </div>
-        </div>
-      </div>
-
-      {/* Header */}
-      <div className="bg-[#F5F5F5] border-b border-gray-200 px-2 py-1.5 flex items-center gap-2">
-        <span className="text-gray-600 text-sm">‹</span>
-        {profileImg && (
-          <img src={profileImg} className="w-6 h-6 rounded-full object-cover" alt="profile" />
-        )}
-        <span className="text-[13px] font-bold text-gray-900 flex-1">{name}</span>
-        <span className="text-[11px] text-gray-400">1</span>
-        <span className="text-gray-400 text-sm">···</span>
-      </div>
-
-      {/* Chat area */}
-      <div
-        className="p-2 overflow-y-auto"
-        style={{
-          minHeight: 180,
-          maxHeight: 320,
-          backgroundImage: bgDataUrl ? `url(${bgDataUrl})` : undefined,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          backgroundColor: bgColor,
-        }}
-      >
-        {/* Date label */}
-        <div className="flex justify-center mb-2">
-          <span className="bg-black/25 text-white text-[9px] px-2 py-0.5 rounded-full">
-            오늘
-          </span>
-        </div>
-
-        {groups.map((group) =>
-          group.map((msg, i) => (
-            <MiniChatBubble
-              key={msg.id}
-              msg={msg}
-              profileImg={profileImg}
-              name={name}
-              showProfile={i === group.length - 1}
-              showName={i === 0}
-            />
-          ))
-        )}
-      </div>
-
-      {/* Input bar */}
-      <div className="bg-[#F4F4F4] border-t border-gray-200 px-2 py-1.5 flex items-center gap-1.5">
-        <span className="text-gray-400 text-[18px]">⊕</span>
-        <div className="flex-1 bg-white rounded-full border border-gray-200 px-3 py-1">
-          <span className="text-gray-400 text-[11px]">메시지를 입력하세요</span>
-        </div>
-        <span className="text-gray-400 text-sm">☺</span>
-      </div>
-    </div>
+    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${map[status]}`}>
+      {labels[status]}
+    </span>
   );
 }
 
-/* ─────────────────────────────────────────
-   Section wrapper
-───────────────────────────────────────── */
-function Section({
-  title,
-  badge,
-  children,
-  defaultOpen = true,
-}: {
-  title: string;
-  badge?: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="bg-gray-800 rounded-2xl overflow-hidden border border-gray-700">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-750"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-yellow-400 font-bold text-sm">{title}</span>
-          {badge && (
-            <span className="bg-yellow-400/20 text-yellow-300 text-[10px] px-2 py-0.5 rounded-full">
-              {badge}
-            </span>
-          )}
-        </div>
-        <span className="text-gray-400 text-sm">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && <div className="px-4 pb-4">{children}</div>}
-    </div>
-  );
-}
+/* ── SENDER LABEL ── */
+const SENDER_COLORS = {
+  me: "bg-[#FFEB33] text-gray-900",
+  other: "bg-white text-gray-900 border border-gray-200",
+};
 
-/* ─────────────────────────────────────────
-   Main Test Page
-───────────────────────────────────────── */
+/* ════════════════════════════════════════
+   MAIN PAGE
+════════════════════════════════════════ */
 export default function TestPage() {
-  const router = useRouter();
-  const setChatRoomData = useEmobinStore((s) => s.setChatRoomData);
-
   const [screenshot, setScreenshot] = useState<string | null>(null);
-  const [imgNaturalSize, setImgNaturalSize] = useState({ w: 1, h: 1 });
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisStatus, setAnalysisStatus] = useState("");
-  const [rawAnalysis, setRawAnalysis] = useState<AnalysisResult | null>(null);
-  const [jsonText, setJsonText] = useState("");
-  const [jsonError, setJsonError] = useState("");
+  const [imgSize, setImgSize] = useState({ w: 1, h: 1 });
 
-  // Editable extracted data
-  const [name, setName] = useState("상대방");
-  const [bounds, setBounds] = useState<ProfileBounds>({
-    xPercent: 0.03,
-    yPercent: 0.14,
-    widthPercent: 0.11,
-    heightPercent: 0.055,
-  });
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [bgColor, setBgColor] = useState("#B2C7D9");
-  const [profileImg, setProfileImg] = useState<string | null>(null);
-  const [bgDataUrl, setBgDataUrl] = useState<string | null>(null);
-  const [extractingProfile, setExtractingProfile] = useState(false);
+  /* Test 1 state */
+  const [t1Status, setT1Status] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [t1Log, setT1Log] = useState<string[]>([]);
+  const [t1Result, setT1Result] = useState<AnalysisResult | null>(null);
 
-  /* ── Upload ── */
+  /* Test 2 state */
+  const [t2Status, setT2Status] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [t2Log, setT2Log] = useState<string[]>([]);
+  const [t2BgResult, setT2BgResult] = useState<BackgroundExtractionResult | null>(null);
+  const [t2ProcessedImg, setT2ProcessedImg] = useState<string | null>(null);
+
+  /* Upload */
   const onDrop = useCallback(async (files: File[]) => {
     if (!files[0]) return;
-    const dataUrl = await fileToDataUrl(files[0]);
-    setScreenshot(dataUrl);
-    setRawAnalysis(null);
-    setMessages([]);
-    setProfileImg(null);
-    setBgDataUrl(null);
-    setAnalysisStatus("");
+    const url = await fileToDataUrl(files[0]);
+    setScreenshot(url);
+    setT1Status("idle"); setT1Result(null); setT1Log([]);
+    setT2Status("idle"); setT2BgResult(null); setT2ProcessedImg(null); setT2Log([]);
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -274,597 +139,412 @@ export default function TestPage() {
     maxFiles: 1,
   });
 
-  /* ── Re-extract profile whenever bounds or screenshot changes ── */
-  useEffect(() => {
+  /* ── Test 1: Message extraction ── */
+  async function runTest1() {
     if (!screenshot) return;
-    setExtractingProfile(true);
-    cropProfileCircle(screenshot, bounds, 200)
-      .then((url) => {
-        setProfileImg(url);
-        setExtractingProfile(false);
-      })
-      .catch(() => {
-        setExtractingProfile(false);
-      });
-  }, [screenshot, bounds]);
-
-  /* ── Generate blurred background ── */
-  useEffect(() => {
-    if (!screenshot) return;
-    createBlurredBackground(screenshot)
-      .then(setBgDataUrl)
-      .catch(() => setBgDataUrl(null));
-  }, [screenshot]);
-
-  /* ── Analyze ── */
-  const handleAnalyze = async () => {
-    if (!screenshot) return;
-    setAnalyzing(true);
-    setAnalysisStatus("이미지 리사이즈 중...");
+    setT1Status("loading");
+    setT1Log(["이미지 리사이즈 중..."]);
+    setT1Result(null);
     try {
-      const resized = await resizeImage(screenshot, 1024, 1024);
+      const resized = await resizeImage(screenshot, 1280, 1280);
       const b64 = dataUrlToBase64(resized);
       const mime = getMimeFromDataUrl(resized);
 
-      setAnalysisStatus("Claude AI로 분석 중... (10~30초 소요)");
+      setT1Log((p) => [...p, "Claude Vision API 호출 중..."]);
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: b64, mimeType: mime }),
       });
-
-      if (!res.ok) throw new Error(`API Error ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AnalysisResult = await res.json();
 
-      setRawAnalysis(data);
-      setJsonText(JSON.stringify(data, null, 2));
-      applyAnalysis(data);
-      setAnalysisStatus(`✅ 완료! 메시지 ${data.messages?.length ?? 0}개 추출`);
-    } catch (e: unknown) {
-      setAnalysisStatus(`❌ 오류: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setAnalyzing(false);
+      setT1Result(data);
+      setT1Log((p) => [
+        ...p,
+        `✅ 완료: 메시지 ${data.messages?.length ?? 0}개, 이름 "${data.participantName}"`,
+      ]);
+      setT1Status("ok");
+    } catch (e) {
+      setT1Log((p) => [...p, `❌ 오류: ${e}`]);
+      setT1Status("error");
     }
-  };
-
-  function applyAnalysis(data: AnalysisResult) {
-    setName(data.participantName || "상대방");
-    if (data.profileBounds) setBounds(data.profileBounds);
-    setBgColor(data.backgroundColorHex || "#B2C7D9");
-    setMessages(
-      (data.messages || []).map((m) => ({
-        ...m,
-        id: uuidv4(),
-        read: true,
-        unreadCount: m.sender === "other" ? 1 : 0,
-      }))
-    );
   }
 
-  /* ── JSON edit ── */
-  const handleApplyJson = () => {
-    setJsonError("");
+  /* ── Test 2: Background extraction ── */
+  async function runTest2() {
+    if (!screenshot) return;
+    setT2Status("loading");
+    setT2Log(["이미지 리사이즈 중..."]);
+    setT2BgResult(null);
+    setT2ProcessedImg(null);
     try {
-      const parsed: AnalysisResult = JSON.parse(jsonText);
-      setRawAnalysis(parsed);
-      applyAnalysis(parsed);
-    } catch {
-      setJsonError("JSON 파싱 오류 - 문법을 확인하세요");
+      const resized = await resizeImage(screenshot, 1280, 1280);
+      const b64 = dataUrlToBase64(resized);
+      const mime = getMimeFromDataUrl(resized);
+
+      setT2Log((p) => [...p, "AI: 말풍선/UI 영역 탐지 중..."]);
+      const res = await fetch("/api/extract-background", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: b64, mimeType: mime }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: BackgroundExtractionResult = await res.json();
+      setT2BgResult(data);
+
+      const bubbleCount = data.regions.filter((r) =>
+        r.type.startsWith("bubble")
+      ).length;
+      setT2Log((p) => [
+        ...p,
+        `AI 완료: ${data.regions.length}개 영역 탐지 (말풍선 ${bubbleCount}개)`,
+        "Canvas로 말풍선 제거 중...",
+      ]);
+
+      // Client-side canvas removal
+      const processed = await removeRegions(screenshot, data.regions, data.backgroundColorHex);
+      setT2ProcessedImg(processed);
+      setT2Log((p) => [...p, "✅ 배경 추출 완료"]);
+      setT2Status("ok");
+    } catch (e) {
+      setT2Log((p) => [...p, `❌ 오류: ${e}`]);
+      setT2Status("error");
     }
+  }
+
+  /* ── Helpers ── */
+  const regionTypeColor: Record<string, string> = {
+    statusbar: "border-purple-400 bg-purple-400/20",
+    header: "border-blue-400 bg-blue-400/20",
+    profile: "border-orange-400 bg-orange-400/20",
+    bubble_other: "border-white bg-white/20",
+    bubble_me: "border-yellow-400 bg-yellow-400/20",
+    date_divider: "border-gray-400 bg-gray-400/20",
+    inputbar: "border-green-400 bg-green-400/20",
   };
 
-  /* ── Message ops ── */
-  const addMessage = () => {
-    const now = new Date();
-    const h = now.getHours();
-    const m = String(now.getMinutes()).padStart(2, "0");
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: uuidv4(),
-        text: "새 메시지",
-        sender: "other",
-        time: `${h >= 12 ? "오후" : "오전"} ${h % 12 || 12}:${m}`,
-        read: true,
-        unreadCount: 1,
-      },
-    ]);
+  const regionTypeLabel: Record<string, string> = {
+    statusbar: "상태바",
+    header: "헤더",
+    profile: "프로필",
+    bubble_other: "상대방 말풍선",
+    bubble_me: "내 말풍선",
+    date_divider: "날짜",
+    inputbar: "입력창",
   };
 
-  const updateMsg = (id: string, key: keyof ChatMessage, val: string | number | boolean) =>
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, [key]: val } : m)));
-
-  const removeMsg = (id: string) =>
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-
-  const moveMsg = (id: string, dir: -1 | 1) => {
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === id);
-      if (idx < 0) return prev;
-      const next = idx + dir;
-      if (next < 0 || next >= prev.length) return prev;
-      const arr = [...prev];
-      [arr[idx], arr[next]] = [arr[next], arr[idx]];
-      return arr;
-    });
-  };
-
-  /* ── Save & Go ── */
-  const handleSaveAndGo = () => {
-    if (!screenshot || messages.length === 0) return;
-    setChatRoomData({
-      participantName: name,
-      profileImageDataUrl: profileImg,
-      backgroundDataUrl: bgDataUrl,
-      backgroundColorHex: bgColor,
-      messages,
-      screenshotDataUrl: screenshot,
-    });
-    router.push("/chat");
-  };
-
-  /* ─────── render ─────── */
+  /* ─────────────────────── RENDER ─────────────────────── */
   return (
-    <div className="min-h-screen bg-gray-900 text-white pb-10">
+    <div className="min-h-screen bg-[#0F172A] text-white">
       {/* Top bar */}
-      <div className="sticky top-0 z-20 bg-yellow-400 px-4 py-3 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">🔬</span>
-          <div>
-            <h1 className="text-gray-900 font-extrabold text-base leading-tight">
-              이모빈 UI 분석 디버거
-            </h1>
-            <p className="text-gray-700 text-[10px]">스크린샷 → AI 분석 → 말풍선 추출 + 수동 조정</p>
-          </div>
+      <div className="bg-[#FFEB33] px-4 py-3 flex items-center justify-between">
+        <div>
+          <h1 className="text-gray-900 font-black text-lg leading-tight tracking-tight">
+            이모빈 핵심 기능 테스트
+          </h1>
+          <p className="text-gray-700 text-[11px] mt-0.5">
+            ① 메시지 추출 &nbsp;·&nbsp; ② 배경화면 추출
+          </p>
         </div>
-        <button
-          onClick={() => router.push("/")}
-          className="text-gray-700 text-xs bg-black/10 px-3 py-1.5 rounded-full"
-        >
-          홈으로
-        </button>
+        <a href="/" className="text-gray-700 text-xs border border-gray-600/40 px-3 py-1.5 rounded-full">
+          홈
+        </a>
       </div>
 
-      <div className="max-w-2xl mx-auto p-4 space-y-4">
-        {/* ── 1. Upload ── */}
-        <Section title="📸 1. 스크린샷 업로드" defaultOpen>
-          <div
-            {...getRootProps()}
-            className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
-              isDragActive
-                ? "border-yellow-400 bg-yellow-400/10"
-                : "border-gray-600 hover:border-yellow-400/60"
-            }`}
-          >
-            <input {...getInputProps()} />
-            {screenshot ? (
-              <p className="text-green-400 text-sm">
-                ✓ 이미지 로드됨 — 다른 파일을 드롭하거나 클릭해서 교체
-              </p>
-            ) : (
-              <p className="text-gray-400 text-sm">
-                카카오톡 스크린샷을 드롭하거나 클릭해서 업로드
-              </p>
-            )}
-          </div>
+      <div className="p-4 max-w-3xl mx-auto space-y-5">
 
-          {screenshot && (
-            <button
-              onClick={handleAnalyze}
-              disabled={analyzing}
-              className="w-full mt-3 py-3 bg-yellow-400 text-gray-900 font-bold rounded-xl disabled:opacity-50 transition-opacity text-sm"
-            >
-              {analyzing ? "⏳ AI 분석 중..." : "🤖 AI 분석 시작 (Claude Vision)"}
-            </button>
-          )}
-
-          {analysisStatus && (
-            <p
-              className={`mt-2 text-xs text-center ${
-                analysisStatus.startsWith("✅")
-                  ? "text-green-400"
-                  : analysisStatus.startsWith("❌")
-                  ? "text-red-400"
-                  : "text-yellow-300"
-              }`}
-            >
-              {analysisStatus}
-            </p>
-          )}
-        </Section>
-
-        {/* ── 2. Screenshot + Preview side-by-side ── */}
-        {screenshot && (
-          <Section
-            title="📱 2. 원본 vs 카카오톡 UI 비교"
-            badge={`메시지 ${messages.length}개`}
-          >
-            <div className="grid grid-cols-2 gap-3">
-              {/* Original screenshot with bounds overlay */}
-              <div>
-                <p className="text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">
-                  원본 스크린샷
+        {/* ═══ UPLOAD ═══ */}
+        <div
+          {...getRootProps()}
+          className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+            isDragActive
+              ? "border-yellow-400 bg-yellow-400/10"
+              : screenshot
+              ? "border-green-500/50 bg-green-900/10"
+              : "border-gray-700 hover:border-gray-500"
+          }`}
+        >
+          <input {...getInputProps()} />
+          {screenshot ? (
+            <div className="flex items-center justify-center gap-3">
+              <img
+                src={screenshot}
+                alt="preview"
+                className="w-12 h-12 object-cover rounded-lg border border-gray-600"
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+                }}
+              />
+              <div className="text-left">
+                <p className="text-green-400 text-sm font-semibold">✓ 스크린샷 로드됨</p>
+                <p className="text-gray-500 text-xs">
+                  {imgSize.w} × {imgSize.h}px · 클릭해서 교체
                 </p>
-                <div
-                  className="relative rounded-lg overflow-hidden bg-black"
-                  style={{ aspectRatio: `${imgNaturalSize.w}/${imgNaturalSize.h}` }}
-                >
-                  <img
-                    src={screenshot}
-                    className="w-full h-full object-contain"
-                    onLoad={(e) => {
-                      const img = e.currentTarget;
-                      setImgNaturalSize({
-                        w: img.naturalWidth,
-                        h: img.naturalHeight,
-                      });
-                    }}
-                  />
-                  {/* Profile bounds highlight */}
-                  <div
-                    className="absolute border-2 border-red-500 rounded"
-                    style={{
-                      left: `${bounds.xPercent * 100}%`,
-                      top: `${bounds.yPercent * 100}%`,
-                      width: `${bounds.widthPercent * 100}%`,
-                      height: `${bounds.heightPercent * 100}%`,
-                      background: "rgba(239,68,68,0.25)",
-                    }}
-                  >
-                    <span
-                      className="absolute bg-red-500 text-white rounded px-1"
-                      style={{ fontSize: 8, top: -16, left: 0, whiteSpace: "nowrap" }}
-                    >
-                      프로필 영역
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* KakaoTalk Preview */}
-              <div>
-                <p className="text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">
-                  카카오톡 UI 미리보기
-                </p>
-                <KakaoPreview
-                  name={name}
-                  messages={messages}
-                  profileImg={profileImg}
-                  bgColor={bgColor}
-                  bgDataUrl={bgDataUrl}
-                />
               </div>
             </div>
-          </Section>
-        )}
+          ) : (
+            <div>
+              <p className="text-gray-300 font-semibold">카카오톡 스크린샷 업로드</p>
+              <p className="text-gray-600 text-sm mt-1">드래그 앤 드롭 또는 클릭</p>
+            </div>
+          )}
+        </div>
 
-        {/* ── 3. Profile bounds editor ── */}
-        {screenshot && (
-          <Section title="👤 3. 프로필 사진 위치 조정" defaultOpen>
-            <div className="flex gap-4">
-              {/* Profile preview circle */}
-              <div className="flex-shrink-0 text-center">
-                <p className="text-[10px] text-gray-400 mb-1">추출 결과</p>
-                <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-dashed border-gray-500 bg-gray-700 flex items-center justify-center">
-                  {extractingProfile ? (
-                    <span className="text-[9px] text-gray-400">처리중...</span>
-                  ) : profileImg ? (
+        {/* ═══ TEST 1: 메시지 추출 ═══ */}
+        <section className="bg-[#1E293B] rounded-2xl overflow-hidden border border-gray-700/50">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/50">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">💬</span>
+              <div>
+                <span className="font-bold text-sm">TEST 1 · 메시지 추출</span>
+                <p className="text-gray-500 text-[10px] mt-0.5">
+                  AI가 말풍선을 읽어 발신자(나/상대방)와 텍스트를 구분하는지 확인
+                </p>
+              </div>
+            </div>
+            <Badge status={t1Status} />
+          </div>
+
+          <div className="p-4 space-y-4">
+            <button
+              onClick={runTest1}
+              disabled={!screenshot || t1Status === "loading"}
+              className="w-full py-2.5 bg-[#FFEB33] text-gray-900 font-bold rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed active:brightness-90 transition-all"
+            >
+              {t1Status === "loading" ? "⏳ 분석 중..." : "🤖 메시지 추출 시작"}
+            </button>
+
+            {/* Log */}
+            {t1Log.length > 0 && (
+              <div className="bg-black/30 rounded-xl p-3 space-y-1">
+                {t1Log.map((l, i) => (
+                  <p key={i} className="text-[11px] font-mono text-gray-300">{l}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Result */}
+            {t1Result && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Screenshot side */}
+                <div>
+                  <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest mb-2">
+                    원본
+                  </p>
+                  {screenshot && (
                     <img
-                      src={profileImg}
-                      className="w-full h-full object-cover"
-                      alt="profile"
+                      src={screenshot}
+                      alt="original"
+                      className="w-full rounded-xl border border-gray-700"
                     />
-                  ) : (
-                    <span className="text-[9px] text-gray-500">없음</span>
                   )}
                 </div>
-                {profileImg && (
-                  <p className="text-[9px] text-green-400 mt-1">✓ 추출됨</p>
-                )}
-              </div>
 
-              {/* Sliders */}
-              <div className="flex-1 space-y-3">
-                {(
-                  [
-                    { key: "xPercent", label: "X 위치 (←→)", max: 0.5 },
-                    { key: "yPercent", label: "Y 위치 (↑↓)", max: 1.0 },
-                    { key: "widthPercent", label: "너비", max: 0.4 },
-                    { key: "heightPercent", label: "높이", max: 0.4 },
-                  ] as const
-                ).map(({ key, label, max }) => (
-                  <div key={key}>
-                    <div className="flex justify-between text-[10px] text-gray-400 mb-0.5">
-                      <span>{label}</span>
-                      <span className="font-mono text-yellow-300">
-                        {(bounds[key] * 100).toFixed(2)}%
+                {/* Extracted messages */}
+                <div>
+                  <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest mb-2">
+                    추출된 메시지 ({t1Result.messages?.length ?? 0}개)
+                  </p>
+
+                  <div className="mb-3 flex flex-wrap gap-2 text-[10px]">
+                    <span className="bg-gray-800 text-gray-300 px-2 py-1 rounded">
+                      상대방: <strong className="text-white">{t1Result.participantName}</strong>
+                    </span>
+                    <span className="bg-gray-800 text-gray-300 px-2 py-1 rounded">
+                      배경색:{" "}
+                      <span
+                        className="inline-block w-3 h-3 rounded-sm align-middle ml-1 border border-gray-600"
+                        style={{ background: t1Result.backgroundColorHex }}
+                      />
+                      <strong className="text-white ml-1">{t1Result.backgroundColorHex}</strong>
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-[400px] overflow-y-auto pr-1">
+                    {(t1Result.messages ?? []).map((msg, i) => (
+                      <div
+                        key={msg.id}
+                        className={`flex gap-2 items-start p-2 rounded-xl border ${
+                          msg.sender === "me"
+                            ? "border-yellow-800/50 bg-yellow-900/20"
+                            : "border-gray-700/50 bg-gray-800/50"
+                        }`}
+                      >
+                        <span className="text-[10px] text-gray-600 flex-shrink-0 mt-0.5 w-4 text-right">
+                          {i + 1}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${SENDER_COLORS[msg.sender]}`}
+                        >
+                          {msg.sender === "me" ? "나" : "상대"}
+                        </span>
+                        <p className="text-[12px] text-white flex-1 leading-snug">{msg.text}</p>
+                        <span className="text-[10px] text-gray-500 flex-shrink-0 whitespace-nowrap">
+                          {msg.time}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Raw JSON toggle */}
+                  <details className="mt-3">
+                    <summary className="text-[10px] text-gray-500 cursor-pointer hover:text-gray-300">
+                      Raw JSON 보기
+                    </summary>
+                    <pre className="mt-2 bg-black/40 text-green-300 text-[9px] p-3 rounded-xl overflow-auto max-h-48 font-mono">
+                      {JSON.stringify(t1Result, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ═══ TEST 2: 배경 추출 ═══ */}
+        <section className="bg-[#1E293B] rounded-2xl overflow-hidden border border-gray-700/50">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/50">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🖼️</span>
+              <div>
+                <span className="font-bold text-sm">TEST 2 · 배경화면 추출</span>
+                <p className="text-gray-500 text-[10px] mt-0.5">
+                  AI가 말풍선/프로필/UI 위치를 탐지 → Canvas로 제거 → 배경만 남김
+                </p>
+              </div>
+            </div>
+            <Badge status={t2Status} />
+          </div>
+
+          <div className="p-4 space-y-4">
+            <button
+              onClick={runTest2}
+              disabled={!screenshot || t2Status === "loading"}
+              className="w-full py-2.5 bg-blue-500 text-white font-bold rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed active:brightness-90 transition-all"
+            >
+              {t2Status === "loading" ? "⏳ 처리 중..." : "🎨 배경 추출 시작"}
+            </button>
+
+            {/* Log */}
+            {t2Log.length > 0 && (
+              <div className="bg-black/30 rounded-xl p-3 space-y-1">
+                {t2Log.map((l, i) => (
+                  <p key={i} className="text-[11px] font-mono text-gray-300">{l}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Regions legend */}
+            {t2BgResult && (
+              <div className="space-y-2">
+                <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">
+                  탐지된 영역 ({t2BgResult.regions.length}개)
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {t2BgResult.regions.map((r, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-lg border ${regionTypeColor[r.type] ?? "border-gray-500 bg-gray-500/20"}`}
+                    >
+                      <span className="font-semibold">
+                        {regionTypeLabel[r.type] ?? r.type}
+                      </span>
+                      {r.label && (
+                        <span className="text-gray-300 max-w-[80px] truncate">
+                          "{r.label}"
+                        </span>
+                      )}
+                      <span className="text-gray-500">
+                        ({(r.w * 100).toFixed(0)}%×{(r.h * 100).toFixed(0)}%)
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={max}
-                      step={0.001}
-                      value={bounds[key]}
-                      onChange={(e) =>
-                        setBounds((prev) => ({ ...prev, [key]: +e.target.value }))
-                      }
-                      className="w-full h-1.5 accent-yellow-400 cursor-pointer"
-                    />
-                  </div>
-                ))}
-
-                <div className="bg-gray-900 rounded-lg p-2 mt-1">
-                  <p className="text-[9px] text-gray-500 mb-1">현재 bounds JSON</p>
-                  <p className="text-[9px] text-green-300 font-mono break-all">
-                    {JSON.stringify(bounds)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </Section>
-        )}
-
-        {/* ── 4. Message editor ── */}
-        <Section
-          title="💬 4. 메시지 편집"
-          badge={`${messages.length}개`}
-          defaultOpen={messages.length > 0}
-        >
-          {messages.length === 0 ? (
-            <p className="text-gray-500 text-sm text-center py-4">
-              아직 메시지가 없습니다. AI 분석 후 자동으로 채워지거나 직접 추가하세요.
-            </p>
-          ) : (
-            <div className="space-y-1.5 max-h-[400px] overflow-y-auto pr-1">
-              {messages.map((msg, i) => (
-                <div
-                  key={msg.id}
-                  className={`flex gap-2 items-center p-2 rounded-lg border transition-colors ${
-                    msg.sender === "me"
-                      ? "bg-yellow-900/20 border-yellow-800/50"
-                      : "bg-gray-700/60 border-gray-600/50"
-                  }`}
-                >
-                  {/* Index */}
-                  <span className="text-[10px] text-gray-500 w-4 text-center flex-shrink-0">
-                    {i + 1}
-                  </span>
-
-                  {/* Order buttons */}
-                  <div className="flex flex-col gap-0.5 flex-shrink-0">
-                    <button
-                      onClick={() => moveMsg(msg.id, -1)}
-                      disabled={i === 0}
-                      className="text-gray-400 hover:text-white disabled:opacity-20 text-[10px] leading-none"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      onClick={() => moveMsg(msg.id, 1)}
-                      disabled={i === messages.length - 1}
-                      className="text-gray-400 hover:text-white disabled:opacity-20 text-[10px] leading-none"
-                    >
-                      ▼
-                    </button>
-                  </div>
-
-                  {/* Sender toggle */}
-                  <button
-                    onClick={() =>
-                      updateMsg(
-                        msg.id,
-                        "sender",
-                        msg.sender === "me" ? "other" : "me"
-                      )
-                    }
-                    className={`text-[10px] font-bold px-2 py-1 rounded-full flex-shrink-0 transition-colors ${
-                      msg.sender === "me"
-                        ? "bg-yellow-400 text-gray-900"
-                        : "bg-white text-gray-900"
-                    }`}
-                  >
-                    {msg.sender === "me" ? "나" : "상대"}
-                  </button>
-
-                  {/* Text input */}
-                  <input
-                    value={msg.text}
-                    onChange={(e) => updateMsg(msg.id, "text", e.target.value)}
-                    className="flex-1 bg-gray-900/50 text-white text-[11px] px-2 py-1 rounded border border-gray-600 min-w-0 focus:outline-none focus:border-yellow-400"
-                    placeholder="메시지 내용"
-                  />
-
-                  {/* Time input */}
-                  <input
-                    value={msg.time}
-                    onChange={(e) => updateMsg(msg.id, "time", e.target.value)}
-                    className="w-[72px] bg-gray-900/50 text-white text-[10px] px-1.5 py-1 rounded border border-gray-600 focus:outline-none focus:border-yellow-400 flex-shrink-0"
-                    placeholder="오후 2:14"
-                  />
-
-                  {/* Unread count */}
-                  <input
-                    type="number"
-                    value={msg.unreadCount ?? 0}
-                    onChange={(e) =>
-                      updateMsg(msg.id, "unreadCount", +e.target.value)
-                    }
-                    min={0}
-                    max={99}
-                    className="w-10 bg-gray-900/50 text-yellow-300 text-[10px] px-1 py-1 rounded border border-gray-600 text-center focus:outline-none flex-shrink-0"
-                    title="안읽음 수"
-                  />
-
-                  {/* Delete */}
-                  <button
-                    onClick={() => removeMsg(msg.id)}
-                    className="text-red-400 hover:text-red-300 text-sm flex-shrink-0"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex gap-2 mt-3">
-            <button
-              onClick={addMessage}
-              className="text-[11px] text-yellow-400 border border-yellow-400/40 px-3 py-1.5 rounded-lg hover:bg-yellow-400/10 transition-colors"
-            >
-              + 메시지 추가
-            </button>
-            <button
-              onClick={() =>
-                setMessages((prev) =>
-                  prev.map((m) => ({ ...m, unreadCount: m.sender === "other" ? 1 : 0 }))
-                )
-              }
-              className="text-[11px] text-gray-400 border border-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              읽음수 초기화
-            </button>
-          </div>
-        </Section>
-
-        {/* ── 5. Background ── */}
-        {screenshot && (
-          <Section title="🎨 5. 배경 설정">
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <label className="text-[11px] text-gray-400">배경 색상:</label>
-                <input
-                  type="color"
-                  value={bgColor}
-                  onChange={(e) => setBgColor(e.target.value)}
-                  className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent"
-                />
-                <input
-                  type="text"
-                  value={bgColor}
-                  onChange={(e) => setBgColor(e.target.value)}
-                  className="bg-gray-900 text-white px-2 py-1 rounded font-mono text-xs border border-gray-600 focus:outline-none w-24"
-                />
-              </div>
-
-              <div>
-                <p className="text-[11px] text-gray-400 mb-1.5">카카오톡 기본 배경 팔레트:</p>
-                <div className="flex gap-2 flex-wrap">
-                  {[
-                    { color: "#B2C7D9", name: "기본 파랑" },
-                    { color: "#E8DDD1", name: "베이지" },
-                    { color: "#D4E8D0", name: "민트" },
-                    { color: "#E8D4D4", name: "핑크" },
-                    { color: "#D4D4E8", name: "라벤더" },
-                    { color: "#F5F0E8", name: "아이보리" },
-                    { color: "#2C2C2C", name: "다크" },
-                  ].map(({ color, name }) => (
-                    <button
-                      key={color}
-                      onClick={() => setBgColor(color)}
-                      title={name}
-                      className={`w-8 h-8 rounded-full border-2 transition-all ${
-                        bgColor === color ? "border-yellow-400 scale-110" : "border-gray-600"
-                      }`}
-                      style={{ backgroundColor: color }}
-                    />
                   ))}
                 </div>
               </div>
+            )}
 
-              {bgDataUrl && (
+            {/* Before / After */}
+            {(screenshot && (t2BgResult || t2ProcessedImg)) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Before: original with overlays */}
                 <div>
-                  <p className="text-[11px] text-gray-400 mb-1">블러 배경 미리보기:</p>
-                  <img
-                    src={bgDataUrl}
-                    className="w-full rounded-lg opacity-70"
-                    style={{ maxHeight: 100, objectFit: "cover" }}
-                    alt="blurred bg"
-                  />
+                  <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest mb-2">
+                    원본 + 탐지 영역
+                  </p>
+                  <div
+                    className="relative rounded-xl overflow-hidden border border-gray-700"
+                    style={{ aspectRatio: `${imgSize.w}/${imgSize.h}` }}
+                  >
+                    <img
+                      src={screenshot}
+                      alt="original"
+                      className="w-full h-full object-contain"
+                    />
+                    {/* Overlay boxes */}
+                    {t2BgResult?.regions.map((r, i) => (
+                      <div
+                        key={i}
+                        className={`absolute border ${regionTypeColor[r.type] ?? "border-gray-400 bg-gray-400/20"}`}
+                        style={{
+                          left: `${r.x * 100}%`,
+                          top: `${r.y * 100}%`,
+                          width: `${r.w * 100}%`,
+                          height: `${r.h * 100}%`,
+                        }}
+                      >
+                        <span
+                          className="absolute top-0 left-0 text-[7px] font-bold text-white bg-black/50 px-0.5 leading-tight"
+                          style={{ whiteSpace: "nowrap" }}
+                        >
+                          {regionTypeLabel[r.type] ?? r.type}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
-          </Section>
-        )}
 
-        {/* ── 6. Name editor ── */}
-        <Section title="📝 6. 이름 수정">
-          <div className="flex gap-2 items-center">
-            {profileImg && (
-              <img
-                src={profileImg}
-                className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-                alt="profile"
-              />
+                {/* After: processed image */}
+                <div>
+                  <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest mb-2">
+                    추출된 배경화면
+                  </p>
+                  {t2ProcessedImg ? (
+                    <>
+                      <img
+                        src={t2ProcessedImg}
+                        alt="background"
+                        className="w-full rounded-xl border border-gray-700"
+                      />
+                      <a
+                        href={t2ProcessedImg}
+                        download="kakao-background.jpg"
+                        className="mt-2 block text-center text-[11px] text-blue-400 border border-blue-400/30 rounded-lg py-1.5 hover:bg-blue-400/10 transition-colors"
+                      >
+                        ⬇ 배경 이미지 다운로드
+                      </a>
+                    </>
+                  ) : (
+                    <div className="aspect-video rounded-xl border border-gray-700 bg-gray-800/50 flex items-center justify-center">
+                      <p className="text-gray-500 text-sm">처리 중...</p>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="flex-1 bg-gray-900 text-white px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-yellow-400 text-sm"
-              placeholder="상대방 이름"
-            />
-          </div>
-        </Section>
 
-        {/* ── 7. Raw JSON editor ── */}
-        {rawAnalysis && (
-          <Section title="🔧 7. AI 분석 JSON 직접 편집" defaultOpen={false}>
-            <p className="text-[10px] text-gray-500 mb-2">
-              JSON을 직접 수정한 뒤 &apos;적용&apos; 버튼을 누르면 위 설정에 반영됩니다.
-            </p>
-            <textarea
-              value={jsonText}
-              onChange={(e) => setJsonText(e.target.value)}
-              className="w-full h-64 bg-gray-900 text-green-300 text-[10px] p-3 rounded-lg font-mono resize-y border border-gray-700 focus:outline-none focus:border-yellow-400"
-              spellCheck={false}
-            />
-            {jsonError && (
-              <p className="text-red-400 text-[10px] mt-1">{jsonError}</p>
-            )}
-            <button
-              onClick={handleApplyJson}
-              className="mt-2 text-[11px] bg-green-700 hover:bg-green-600 text-white px-4 py-1.5 rounded-lg transition-colors"
-            >
-              JSON 적용
-            </button>
-          </Section>
-        )}
-
-        {/* ── 8. API 없을 때 안내 ── */}
-        <Section title="ℹ️ 8. API 키 설정 안내" defaultOpen={false}>
-          <div className="space-y-2 text-[11px]">
-            <p className="text-gray-300">
-              AI 분석을 사용하려면 <code className="text-yellow-300">.env.local</code> 에
-              Anthropic API 키를 설정하세요:
-            </p>
-            <div className="bg-gray-900 rounded-lg p-3 font-mono text-green-300">
-              ANTHROPIC_API_KEY=sk-ant-...
+            {/* Info box */}
+            <div className="bg-black/20 rounded-xl p-3 border border-gray-700/40">
+              <p className="text-[10px] text-gray-400 leading-relaxed">
+                <strong className="text-gray-300">처리 방식:</strong> AI(Claude)가 모든 말풍선, 프로필, 헤더, 입력창 위치를 px 좌표로 계산 →
+                Canvas API가 각 영역을 주변 픽셀 색상으로 채워 배경화면 복원 →
+                엣지 블러로 자연스럽게 블렌딩
+              </p>
             </div>
-            <p className="text-gray-400">
-              API 키가 없으면 목 데이터(샘플 메시지)가 사용됩니다. 메시지는
-              위 편집기에서 직접 수정 가능합니다.
-            </p>
           </div>
-        </Section>
+        </section>
 
-        {/* ── Final CTA ── */}
-        <div className="space-y-2 pt-2">
-          <button
-            onClick={handleSaveAndGo}
-            disabled={!screenshot || messages.length === 0}
-            className="w-full py-4 bg-yellow-400 text-gray-900 font-extrabold text-base rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed active:brightness-90 transition-all shadow-lg"
-          >
-            ✅ 이 설정으로 채팅방 만들기
-          </button>
-          {(!screenshot || messages.length === 0) && (
-            <p className="text-center text-gray-500 text-xs">
-              {!screenshot
-                ? "스크린샷을 먼저 업로드하세요"
-                : "메시지를 추가하거나 AI 분석을 실행하세요"}
-            </p>
-          )}
-        </div>
       </div>
     </div>
   );
