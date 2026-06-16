@@ -119,6 +119,15 @@ export default function TestPage() {
       .then((r) => r.json())
       .then((d) => setApiKeyStatus(d.apiKeySet ? "ok" : "missing"))
       .catch(() => setApiKeyStatus("missing"));
+
+    fetch("/test.png")
+      .then((r) => r.blob())
+      .then((blob) => {
+        const reader = new FileReader();
+        reader.onload = () => setScreenshot(reader.result as string);
+        reader.readAsDataURL(blob);
+      })
+      .catch(() => {});
   }, []);
 
   /* Test 1 state */
