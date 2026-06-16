@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
   let rawText: string;
   try {
     const detectResp = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-flash-latest",
       contents: [
         {
           role: "user",
