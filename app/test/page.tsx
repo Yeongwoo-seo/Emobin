@@ -164,13 +164,28 @@ export default function TestPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: b64, mimeType: mime }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: AnalysisResult = await res.json();
+      const data = await res.json();
 
-      setT1Result(data);
+      // Check for API-level errors
+      if (!res.ok || data.error) {
+        const errMsg = data.error || `HTTP ${res.status}`;
+        const detail = data.detail ? ` (${data.detail})` : "";
+        const raw = data.rawResponse ? `\n응답: ${data.rawResponse}` : "";
+        setT1Log((p) => [...p, `❌ 실패: ${errMsg}${detail}${raw}`]);
+        setT1Status("error");
+        return;
+      }
+
+      const source = data._source === "mock_no_key"
+        ? "⚠️ 목 데이터 (API 키 없음)"
+        : data._source === "claude"
+        ? "✅ Claude 실제 분석"
+        : "⚠️ 알 수 없는 소스";
+
+      setT1Result(data as AnalysisResult);
       setT1Log((p) => [
         ...p,
-        `✅ 완료: 메시지 ${data.messages?.length ?? 0}개, 이름 "${data.participantName}"`,
+        `${source}: 메시지 ${data.messages?.length ?? 0}개, 이름 "${data.participantName}"`,
       ]);
       setT1Status("ok");
     } catch (e) {
