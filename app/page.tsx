@@ -41,6 +41,7 @@ function KakaoUI({
   return (
     <div
       style={{
+        position: "relative",
         width: 393,
         height: 852,
         transform: `scale(${scale})`,
@@ -118,25 +119,34 @@ function KakaoUI({
           <span style={{ fontSize: 17, color: "#1a1a1a", marginLeft: 2 }}>1</span>
         </button>
 
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, overflow: "hidden" }}>
-          {profileDataUrl && (
-            <img
-              src={profileDataUrl}
-              alt="profile"
-              style={{ width: 30, height: 30, objectFit: "cover", borderRadius: "28%", flexShrink: 0 }}
-            />
-          )}
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
           <span style={{ fontSize: 17, fontWeight: 700, color: "#1a1a1a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {result.participantName}
           </span>
         </div>
 
-        <div style={{ display: "flex", gap: 0 }}>
-          {["🔍", "📞", "☰"].map((icon, i) => (
-            <button key={i} style={{ width: 40, height: 44, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", fontSize: 17 }}>
-              {icon}
-            </button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center" }}>
+          {/* Search */}
+          <button style={{ width: 40, height: 44, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", cursor: "pointer" }}>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="8.5" cy="8.5" r="5.5" stroke="#1a1a1a" strokeWidth="1.8"/>
+              <line x1="12.5" y1="12.5" x2="17" y2="17" stroke="#1a1a1a" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </button>
+          {/* Phone */}
+          <button style={{ width: 40, height: 44, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", cursor: "pointer" }}>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M7 3.5C7 3.5 5.5 3.5 4.5 5C3.5 6.5 3.5 8 5 10C6.5 12 9 14.5 11 16C13 17.5 14.5 17.5 16 16.5C17.5 15.5 17.5 14 17.5 14L15 11.5C15 11.5 14 11 13.5 12C13 13 12.5 13.5 12 13C11 12 9 10 8 9C7.5 8.5 8 8 9 7.5C10 7 9.5 6 9.5 6L7 3.5Z" stroke="#1a1a1a" strokeWidth="1.5" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          {/* Menu */}
+          <button style={{ width: 40, height: 44, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", cursor: "pointer" }}>
+            <svg width="20" height="16" viewBox="0 0 20 16" fill="none">
+              <line x1="1" y1="1" x2="19" y2="1" stroke="#1a1a1a" strokeWidth="1.8" strokeLinecap="round"/>
+              <line x1="1" y1="8" x2="19" y2="8" stroke="#1a1a1a" strokeWidth="1.8" strokeLinecap="round"/>
+              <line x1="1" y1="15" x2="19" y2="15" stroke="#1a1a1a" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -145,7 +155,7 @@ function KakaoUI({
         style={{
           flex: 1,
           overflowY: "auto",
-          padding: "8px 0",
+          padding: "8px 10px",
           background: bgColor,
           minHeight: 0,
         }}
@@ -168,8 +178,8 @@ function KakaoUI({
       <div
         style={{
           flexShrink: 0,
-          height: 83,
-          background: "#fff",
+          height: 54,
+          background: "#F5F5F5",
           borderTop: "0.5px solid #D1D1D6",
           display: "flex",
           alignItems: "center",
@@ -177,13 +187,44 @@ function KakaoUI({
           gap: 8,
         }}
       >
-        <button style={{ width: 32, height: 32, borderRadius: "50%", background: "#F2F2F7", border: "none", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-        <div style={{ flex: 1, height: 36, background: "#F2F2F7", borderRadius: 18, display: "flex", alignItems: "center", padding: "0 14px" }}>
+        {/* + button */}
+        <button style={{ width: 34, height: 34, borderRadius: "50%", background: "#E1E1E6", border: "none", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer" }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <line x1="8" y1="2" x2="8" y2="14" stroke="#555" strokeWidth="2" strokeLinecap="round"/>
+            <line x1="2" y1="8" x2="14" y2="8" stroke="#555" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+        </button>
+        {/* Text input */}
+        <div style={{ flex: 1, height: 36, background: "#fff", borderRadius: 18, border: "0.5px solid #D1D1D6", display: "flex", alignItems: "center", padding: "0 14px" }}>
           <span style={{ fontSize: 15, color: "#AEAEB2" }}>메시지 입력</span>
         </div>
-        <div style={{ display: "flex", gap: 8, color: "#8E8E93", fontSize: 20 }}>
-          <span>😊</span>
-          <span>#</span>
+        {/* Right icons */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+          {/* Emoji */}
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            <circle cx="11" cy="11" r="9.5" stroke="#8E8E93" strokeWidth="1.5"/>
+            <circle cx="8" cy="9.5" r="1" fill="#8E8E93"/>
+            <circle cx="14" cy="9.5" r="1" fill="#8E8E93"/>
+            <path d="M7.5 13.5C7.5 13.5 8.5 15.5 11 15.5C13.5 15.5 14.5 13.5 14.5 13.5" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+          {/* Hashtag */}
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <line x1="6" y1="3" x2="4" y2="15" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="12" y1="3" x2="10" y2="15" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="3" y1="7" x2="15" y2="7" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="2.5" y1="11" x2="14.5" y2="11" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+          {/* Waveform/voice */}
+          <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
+            <line x1="1" y1="7" x2="3" y2="7" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="4.5" y1="4.5" x2="4.5" y2="9.5" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="7" y1="2" x2="7" y2="12" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="9.5" y1="4" x2="9.5" y2="10" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="12" y1="1" x2="12" y2="13" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="14.5" y1="4" x2="14.5" y2="10" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="17" y1="2" x2="17" y2="12" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="19" y1="4.5" x2="19" y2="9.5" stroke="#8E8E93" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
         </div>
       </div>
 

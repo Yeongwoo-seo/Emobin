@@ -31,14 +31,12 @@ export default function MessageBubble({
   // For consecutive messages from same sender, flatten the inner corners
   const getBubbleRadius = () => {
     if (isMe) {
-      // Sent: right side
       const topRight = isFirst ? 18 : 4;
-      const bottomRight = isLast ? 4 : 4;
+      const bottomRight = isLast ? 18 : 4;
       return `18px ${topRight}px ${bottomRight}px 18px`;
     } else {
-      // Received: left side
       const topLeft = isFirst ? 18 : 4;
-      const bottomLeft = isLast ? 4 : 4;
+      const bottomLeft = isLast ? 18 : 4;
       return `${topLeft}px 18px 18px ${bottomLeft}px`;
     }
   };
