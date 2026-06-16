@@ -10,8 +10,8 @@ interface MessageBubbleProps {
   participantName: string;
   showProfile: boolean;
   showName: boolean;
-  isFirst: boolean;   // first in group (affects top border radius)
-  isLast: boolean;    // last in group (affects bottom border radius + profile show)
+  isFirst: boolean;
+  isLast: boolean;
   isNew?: boolean;
 }
 
@@ -27,17 +27,25 @@ export default function MessageBubble({
 }: MessageBubbleProps) {
   const isMe = message.sender === "me";
 
-  // KakaoTalk bubble border-radius logic
-  // For consecutive messages from same sender, flatten the inner corners
+  // KakaoTalk bubble shape:
+  // - Free corners (outer edge, no adjacent bubble): 20px
+  // - Connected corners (adjacent to another bubble from same sender): 5px
+  const F = 20; // free
+  const C = 5;  // connected
+
   const getBubbleRadius = () => {
     if (isMe) {
-      const topRight = isFirst ? 18 : 4;
-      const bottomRight = isLast ? 18 : 4;
-      return `18px ${topRight}px ${bottomRight}px 18px`;
+      // Right-side bubbles: connection on the right
+      // TL TR BR BL
+      const TR = isFirst ? F : C;
+      const BR = isLast ? F : C;
+      return `${F}px ${TR}px ${BR}px ${F}px`;
     } else {
-      const topLeft = isFirst ? 18 : 4;
-      const bottomLeft = isLast ? 18 : 4;
-      return `${topLeft}px 18px 18px ${bottomLeft}px`;
+      // Left-side bubbles: connection on the left
+      // TL TR BR BL
+      const TL = isFirst ? F : C;
+      const BL = isLast ? F : C;
+      return `${TL}px ${F}px ${F}px ${BL}px`;
     }
   };
 
@@ -47,16 +55,19 @@ export default function MessageBubble({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.22, ease: [0.34, 1.2, 0.64, 1] }}
       className={cn(
-        "flex items-end gap-2",
+        "flex items-end gap-[6px]",
         isMe ? "flex-row-reverse" : "flex-row",
-        isLast ? "mb-2" : "mb-0.5"
+        isLast ? "mb-[10px]" : "mb-[2px]"
       )}
     >
-      {/* Profile picture column (other side only) */}
+      {/* Profile picture column (received only) */}
       {!isMe && (
-        <div className="w-[38px] flex-shrink-0 self-end">
+        <div className="w-[36px] flex-shrink-0 self-end">
           {isLast && (
-            <div className="w-[38px] h-[38px] overflow-hidden bg-gray-300" style={{ borderRadius: "28%" }}>
+            <div
+              className="w-[36px] h-[36px] overflow-hidden"
+              style={{ borderRadius: "22%" }}
+            >
               {profileImageDataUrl ? (
                 <img
                   src={profileImageDataUrl}
@@ -64,7 +75,7 @@ export default function MessageBubble({
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full bg-gray-400 flex items-center justify-center">
+                <div className="w-full h-full bg-[#B0B0B0] flex items-center justify-center">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff">
                     <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
                   </svg>
@@ -83,39 +94,41 @@ export default function MessageBubble({
           "max-w-[72%]"
         )}
       >
-        {/* Name label (other, first in group only) */}
+        {/* Name label (received, first in group only) */}
         {!isMe && isFirst && (
-          <span className="text-[12px] text-gray-700 font-medium mb-[3px] ml-0.5">
+          <span className="text-[12px] text-[#555] font-medium mb-[4px] ml-[1px]">
             {participantName}
           </span>
         )}
 
-        {/* Bubble + meta row */}
+        {/* Bubble + timestamp row */}
         <div
           className={cn(
-            "flex items-end gap-[5px]",
+            "flex items-end gap-[4px]",
             isMe ? "flex-row-reverse" : "flex-row"
           )}
         >
           {/* Bubble */}
           <div
-            className={cn(
-              "px-[12px] py-[8px] text-[14px] leading-[1.45] break-words max-w-full",
-              isMe ? "text-[#1a1a1a]" : "text-[#1a1a1a] shadow-sm"
-            )}
+            className="px-[12px] py-[9px] text-[15px] leading-[1.42] break-words max-w-full"
             style={{
               background: isMe ? "#FFEB33" : "#FFFFFF",
               borderRadius: getBubbleRadius(),
+              color: "#1a1a1a",
+              boxShadow: isMe
+                ? "none"
+                : "0 1px 2px rgba(0,0,0,0.10)",
+              border: isMe ? "none" : "0.5px solid rgba(0,0,0,0.06)",
             }}
           >
             {message.text}
           </div>
 
-          {/* Time + unread count (only on last message in group) */}
+          {/* Time (only on last in group) */}
           {isLast && (
             <div
               className={cn(
-                "flex flex-col pb-[2px] flex-shrink-0",
+                "flex flex-col pb-[3px] flex-shrink-0",
                 isMe ? "items-end" : "items-start"
               )}
             >
@@ -124,7 +137,7 @@ export default function MessageBubble({
                   {message.unreadCount}
                 </span>
               )}
-              <span className="text-[11px] text-[#8E8E8E] leading-none whitespace-nowrap">
+              <span className="text-[11px] text-[#8C8C8C] leading-none whitespace-nowrap">
                 {message.time}
               </span>
             </div>
@@ -132,8 +145,8 @@ export default function MessageBubble({
         </div>
       </div>
 
-      {/* Spacer for sent messages (mirrors profile area) */}
-      {isMe && <div className="w-[38px] flex-shrink-0" />}
+      {/* Right spacer for sent messages */}
+      {isMe && <div className="w-[36px] flex-shrink-0" />}
     </motion.div>
   );
 }

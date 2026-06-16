@@ -485,7 +485,7 @@ export default function TestPage() {
                   src={profileDataUrl}
                   alt="extracted profile"
                   className="w-10 h-10 object-cover shadow"
-                  style={{ borderRadius: "28%" }}
+                  style={{ borderRadius: "22%" }}
                 />
                 <div className="text-[10px] text-gray-400">
                   <p className="text-gray-300 font-semibold">추출된 프로필 (squircle)</p>

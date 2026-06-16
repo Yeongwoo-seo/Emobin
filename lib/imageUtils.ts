@@ -17,7 +17,7 @@ export async function cropProfileCircle(
   return cropProfileSquircle(screenshotDataUrl, bounds, outputSize);
 }
 
-// KakaoTalk profile shape: squircle (iOS-style rounded square, ~28% corner radius)
+// KakaoTalk profile shape: squircle matching iOS app-icon shape (~22% corner radius)
 export async function cropProfileSquircle(
   screenshotDataUrl: string,
   bounds: ProfileBounds,
@@ -34,8 +34,8 @@ export async function cropProfileSquircle(
   const srcW = bounds.widthPercent * img.naturalWidth;
   const srcH = bounds.heightPercent * img.naturalHeight;
 
-  // Squircle clip path: rounded square with ~28% corner radius
-  const r = outputSize * 0.28;
+  // iOS squircle approximation: ~22% corner radius fills photo snugly
+  const r = outputSize * 0.22;
   ctx.beginPath();
   ctx.roundRect(0, 0, outputSize, outputSize, r);
   ctx.closePath();
