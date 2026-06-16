@@ -58,7 +58,7 @@ export default function MessageBubble({
       {!isMe && (
         <div className="w-[38px] flex-shrink-0 self-end">
           {isLast && (
-            <div className="w-[38px] h-[38px] rounded-full overflow-hidden bg-gray-300">
+            <div className="w-[38px] h-[38px] overflow-hidden bg-gray-300" style={{ borderRadius: "28%" }}>
               {profileImageDataUrl ? (
                 <img
                   src={profileImageDataUrl}

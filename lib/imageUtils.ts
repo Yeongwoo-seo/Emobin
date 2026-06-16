@@ -14,6 +14,15 @@ export async function cropProfileCircle(
   bounds: ProfileBounds,
   outputSize = 200
 ): Promise<string> {
+  return cropProfileSquircle(screenshotDataUrl, bounds, outputSize);
+}
+
+// KakaoTalk profile shape: squircle (iOS-style rounded square, ~28% corner radius)
+export async function cropProfileSquircle(
+  screenshotDataUrl: string,
+  bounds: ProfileBounds,
+  outputSize = 200
+): Promise<string> {
   const img = await loadImage(screenshotDataUrl);
   const canvas = document.createElement("canvas");
   canvas.width = outputSize;
@@ -25,8 +34,10 @@ export async function cropProfileCircle(
   const srcW = bounds.widthPercent * img.naturalWidth;
   const srcH = bounds.heightPercent * img.naturalHeight;
 
+  // Squircle clip path: rounded square with ~28% corner radius
+  const r = outputSize * 0.28;
   ctx.beginPath();
-  ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+  ctx.roundRect(0, 0, outputSize, outputSize, r);
   ctx.closePath();
   ctx.clip();
   ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, outputSize, outputSize);
