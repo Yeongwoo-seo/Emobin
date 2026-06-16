@@ -4,48 +4,74 @@ import type { AnalysisResult } from "@/lib/types";
 
 const client = new Anthropic();
 
-const ANALYSIS_PROMPT = `당신은 카카오톡 대화 스크린샷을 분석하는 전문가입니다.
-주어진 카카오톡 스크린샷에서 다음 정보를 JSON 형식으로 추출해주세요:
+const SYSTEM_PROMPT = `당신은 카카오톡 UI 전문 분석가입니다. 스크린샷에서 정보를 정확하게 추출합니다.`;
 
-1. participantName: 상대방의 이름 (채팅방 제목 또는 헤더에서 추출)
-2. profileBounds: 상대방 프로필 사진의 위치 (이미지 전체 크기 대비 비율, 0~1 사이 값)
-   - 프로필 사진이 보이지 않으면 null
-   - xPercent: 왼쪽 상단 x 좌표 비율
-   - yPercent: 왼쪽 상단 y 좌표 비율
-   - widthPercent: 너비 비율
-   - heightPercent: 높이 비율
-3. messages: 보이는 모든 메시지 목록 (순서대로)
-   - id: 순번 문자열
-   - text: 메시지 내용
-   - sender: "me"(내가 보낸 것, 오른쪽 노란 말풍선) 또는 "other"(상대방, 왼쪽 흰색 말풍선)
-   - time: 표시된 시간 (예: "오후 2:14")
-4. backgroundColorHex: 배경 색상 (헥스 코드, 예: "#B2C7D9")
+const USER_PROMPT = `이것은 한국 카카오톡 대화 스크린샷입니다.
 
-반드시 유효한 JSON만 반환하고, 다른 텍스트는 포함하지 마세요.
-JSON 구조:
+카카오톡 UI 특징 (참고):
+- 헤더(상단): 상대방 이름이 가운데 또는 좌측에 표시됨, 뒤로가기 화살표, 전화/검색 아이콘
+- 받은 메시지(왼쪽): 상대방 프로필 사진(원형, 왼쪽) + 흰색/회색 말풍선
+- 보낸 메시지(오른쪽): 노란색/황색 말풍선 (#FFEB33 계열)
+- 시간: 말풍선 바깥쪽에 "오전/오후 H:MM" 형식
+- 안읽음: 말풍선 위에 숫자(노란색)
+- 배경: 카카오톡 기본 파란색(#B2C7D9) 또는 사용자 설정 배경
+
+아래 형식의 JSON만 반환하세요. 다른 텍스트, 마크다운, 코드블록 없이 순수 JSON만 반환:
+
 {
-  "participantName": "이름",
-  "profileBounds": {"xPercent": 0.03, "yPercent": 0.12, "widthPercent": 0.1, "heightPercent": 0.06} or null,
-  "messages": [{"id": "1", "text": "메시지", "sender": "other", "time": "오후 2:14"}],
-  "backgroundColorHex": "#B2C7D9"
-}`;
+  "participantName": "상대방 이름 (헤더에서 추출)",
+  "profileBounds": {
+    "xPercent": 0.0~1.0 사이 실수 (스크린샷 너비 대비 프로필 좌상단 X 위치),
+    "yPercent": 0.0~1.0 사이 실수 (스크린샷 높이 대비 프로필 좌상단 Y 위치),
+    "widthPercent": 0.0~1.0 사이 실수 (스크린샷 너비 대비 프로필 너비),
+    "heightPercent": 0.0~1.0 사이 실수 (스크린샷 높이 대비 프로필 높이)
+  },
+  "messages": [
+    {
+      "id": "1",
+      "text": "정확한 메시지 텍스트",
+      "sender": "other" 또는 "me",
+      "time": "오후 2:14" 형식
+    }
+  ],
+  "backgroundColorHex": "#16진수 색상코드"
+}
+
+중요 규칙:
+1. messages는 화면 위→아래 순서로 정렬
+2. 왼쪽 말풍선 = sender: "other", 오른쪽 노란 말풍선 = sender: "me"
+3. profileBounds: 첫 번째로 보이는 상대방 프로필 사진 위치 (프로필 없으면 null)
+4. 텍스트가 없는 메시지(이미지, 스티커)는 "[이미지]", "[스티커]" 등으로 표기
+5. 모든 숫자는 소수점 3자리까지 정확하게 계산
+6. JSON만 반환 (다른 텍스트 절대 금지)`;
 
 export async function POST(request: NextRequest) {
   try {
     const { imageBase64, mimeType } = await request.json();
 
     if (!imageBase64) {
-      return NextResponse.json({ error: "이미지가 필요합니다." }, { status: 400 });
+      return NextResponse.json(
+        { error: "이미지가 필요합니다." },
+        { status: 400 }
+      );
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(getMockResult(), { status: 200 });
+    if (!apiKey || apiKey === "your_api_key_here") {
+      console.log("[analyze] No API key found, returning mock data");
+      return NextResponse.json(getMockResult());
     }
+
+    const validMime = (
+      ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mimeType)
+        ? mimeType
+        : "image/jpeg"
+    ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
     const response = await client.messages.create({
       model: "claude-opus-4-8",
-      max_tokens: 2048,
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
@@ -54,17 +80,13 @@ export async function POST(request: NextRequest) {
               type: "image",
               source: {
                 type: "base64",
-                media_type: (mimeType || "image/png") as
-                  | "image/jpeg"
-                  | "image/png"
-                  | "image/gif"
-                  | "image/webp",
+                media_type: validMime,
                 data: imageBase64,
               },
             },
             {
               type: "text",
-              text: ANALYSIS_PROMPT,
+              text: USER_PROMPT,
             },
           ],
         },
@@ -73,39 +95,67 @@ export async function POST(request: NextRequest) {
 
     const content = response.content[0];
     if (content.type !== "text") {
-      return NextResponse.json({ error: "분석 실패" }, { status: 500 });
+      console.error("[analyze] Unexpected response type");
+      return NextResponse.json(getMockResult());
     }
+
+    // Strip any markdown fences or extra text
+    let rawText = content.text.trim();
+    rawText = rawText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+
+    // Find the first { and last } to extract just the JSON object
+    const start = rawText.indexOf("{");
+    const end = rawText.lastIndexOf("}");
+    if (start === -1 || end === -1) {
+      console.error("[analyze] No JSON object found in response:", rawText);
+      return NextResponse.json(getMockResult());
+    }
+    rawText = rawText.slice(start, end + 1);
 
     let result: AnalysisResult;
     try {
-      const jsonText = content.text.trim().replace(/```json\n?|\n?```/g, "");
-      result = JSON.parse(jsonText);
-    } catch {
-      return NextResponse.json(getMockResult(), { status: 200 });
+      result = JSON.parse(rawText);
+    } catch (parseErr) {
+      console.error("[analyze] JSON parse failed:", parseErr, rawText);
+      return NextResponse.json(getMockResult());
     }
+
+    // Validate and sanitize
+    if (!result.participantName) result.participantName = "상대방";
+    if (!Array.isArray(result.messages)) result.messages = [];
+    if (!result.backgroundColorHex) result.backgroundColorHex = "#B2C7D9";
+
+    result.messages = result.messages.map((m, i) => ({
+      id: String(i + 1),
+      text: m.text || "",
+      sender: m.sender === "me" ? "me" : "other",
+      time: m.time || "오후 12:00",
+    }));
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error("Analysis error:", error);
-    return NextResponse.json(getMockResult(), { status: 200 });
+    console.error("[analyze] Error:", error);
+    return NextResponse.json(getMockResult());
   }
 }
 
 function getMockResult(): AnalysisResult {
   return {
-    participantName: "상대방",
+    participantName: "샘플 친구",
     profileBounds: {
-      xPercent: 0.03,
-      yPercent: 0.14,
-      widthPercent: 0.11,
-      heightPercent: 0.055,
+      xPercent: 0.032,
+      yPercent: 0.145,
+      widthPercent: 0.108,
+      heightPercent: 0.054,
     },
     messages: [
-      { id: "1", text: "안녕!", sender: "other", time: "오후 2:14" },
-      { id: "2", text: "오늘 어때?", sender: "other", time: "오후 2:14" },
-      { id: "3", text: "좋아! 같이 점심 먹을래?", sender: "me", time: "오후 2:15" },
-      { id: "4", text: "그래, 어디서 먹을까?", sender: "other", time: "오후 2:16" },
-      { id: "5", text: "새로 생긴 파스타 집 어때?", sender: "me", time: "오후 2:17" },
+      { id: "1", text: "안녕! 오늘 뭐 해?", sender: "other", time: "오후 2:14" },
+      { id: "2", text: "나 요즘 바빠서 ㅠ", sender: "other", time: "오후 2:14" },
+      { id: "3", text: "ㅋㅋ 나도 오늘 회의 많아", sender: "me", time: "오후 2:15" },
+      { id: "4", text: "저녁에 시간 돼?", sender: "me", time: "오후 2:15" },
+      { id: "5", text: "응 7시 이후로는 괜찮아", sender: "other", time: "오후 2:17" },
+      { id: "6", text: "그럼 새로 생긴 파스타 집 어때?", sender: "me", time: "오후 2:18" },
+      { id: "7", text: "오 좋아!! 예약해줘 ㅎㅎ", sender: "other", time: "오후 2:19" },
     ],
     backgroundColorHex: "#B2C7D9",
   };

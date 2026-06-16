@@ -116,8 +116,8 @@ export default function UploadPage() {
         </motion.div>
       </div>
 
-      {/* CTA Button */}
-      <div className="px-5 pb-8 pt-4">
+      {/* CTA Buttons */}
+      <div className="px-5 pb-8 pt-4 space-y-3">
         <motion.button
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: preview ? 1 : 0.4, y: 0 }}
@@ -129,6 +129,17 @@ export default function UploadPage() {
         >
           대화방 만들기
         </motion.button>
+
+        <motion.a
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          href="/test"
+          className="w-full h-[44px] border border-gray-300 rounded-2xl font-semibold text-[14px] text-gray-500 flex items-center justify-center gap-1.5 hover:bg-gray-50 transition-colors"
+        >
+          <span>🔬</span>
+          <span>UI 분석 테스트 페이지</span>
+        </motion.a>
       </div>
     </div>
   );

@@ -12,6 +12,26 @@ function getTodayLabel() {
   return `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일 ${days[now.getDay()]}요일`;
 }
 
+interface MessageGroup {
+  sender: "me" | "other";
+  messages: ChatMessage[];
+}
+
+function groupMessages(messages: ChatMessage[]): MessageGroup[] {
+  const groups: MessageGroup[] = [];
+  let cur: MessageGroup | null = null;
+
+  for (const msg of messages) {
+    if (!cur || cur.sender !== msg.sender) {
+      cur = { sender: msg.sender, messages: [msg] };
+      groups.push(cur);
+    } else {
+      cur.messages.push(msg);
+    }
+  }
+  return groups;
+}
+
 export default function MessageList() {
   const chatRoomData = useEmobinStore((s) => s.chatRoomData);
   const listRef = useRef<HTMLDivElement>(null);
@@ -20,7 +40,7 @@ export default function MessageList() {
 
   useEffect(() => {
     const messages = chatRoomData?.messages ?? [];
-    if (messages.length > prevLengthRef.current) {
+    if (messages.length > prevLengthRef.current && prevLengthRef.current > 0) {
       const newest = messages[messages.length - 1];
       setNewMsgIds((prev) => new Set(Array.from(prev).concat(newest.id)));
       setTimeout(() => {
@@ -33,6 +53,7 @@ export default function MessageList() {
     prevLengthRef.current = messages.length;
   }, [chatRoomData?.messages]);
 
+  // Scroll to bottom on initial load
   useEffect(() => {
     if (listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -42,51 +63,35 @@ export default function MessageList() {
   if (!chatRoomData) return null;
 
   const { messages, profileImageDataUrl, participantName } = chatRoomData;
-
-  const grouped = groupMessages(messages);
+  const groups = groupMessages(messages);
 
   return (
     <div
       ref={listRef}
-      className="flex-1 overflow-y-auto scrollbar-hide px-3 py-4 flex flex-col"
+      className="flex-1 overflow-y-auto scrollbar-hide py-3 px-3"
     >
       <DateSeparator label={getTodayLabel()} />
 
-      {grouped.map((group) => (
-        <div key={group[0].id}>
-          {group.map((msg, i) => (
+      {groups.map((group, gi) => (
+        <div key={gi} className="mb-1">
+          {group.messages.map((msg, mi) => (
             <MessageBubble
               key={msg.id}
               message={msg}
               profileImageDataUrl={profileImageDataUrl}
               participantName={participantName}
-              showProfile={i === group.length - 1}
-              showName={i === 0}
+              showProfile={mi === group.messages.length - 1}
+              showName={mi === 0}
+              isFirst={mi === 0}
+              isLast={mi === group.messages.length - 1}
               isNew={newMsgIds.has(msg.id)}
             />
           ))}
-          <div className="mb-2" />
         </div>
       ))}
+
+      {/* Bottom padding for input bar */}
+      <div className="h-2" />
     </div>
   );
-}
-
-function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
-  const groups: ChatMessage[][] = [];
-  let currentGroup: ChatMessage[] = [];
-  let currentSender: string | null = null;
-
-  for (const msg of messages) {
-    if (msg.sender !== currentSender) {
-      if (currentGroup.length > 0) groups.push(currentGroup);
-      currentGroup = [msg];
-      currentSender = msg.sender;
-    } else {
-      currentGroup.push(msg);
-    }
-  }
-  if (currentGroup.length > 0) groups.push(currentGroup);
-
-  return groups;
 }
