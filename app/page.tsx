@@ -247,13 +247,19 @@ export default function TestPage() {
       setT2Log((p) => [
         ...p,
         `AI 완료: ${data.regions.length}개 영역 탐지 (말풍선 ${bubbleCount}개)`,
-        "Canvas로 말풍선 제거 중...",
       ]);
 
-      // Client-side canvas removal
-      const processed = await removeRegions(screenshot, data.regions, data.backgroundColorHex);
-      setT2ProcessedImg(processed);
-      setT2Log((p) => [...p, "✅ 배경 추출 완료"]);
+      if (data.inpaintedBackgroundBase64) {
+        // AI가 생성한 배경 이미지 사용
+        setT2ProcessedImg(`data:image/png;base64,${data.inpaintedBackgroundBase64}`);
+        setT2Log((p) => [...p, "✅ AI 인페인팅 완료 (Gemini 이미지 생성)"]);
+      } else {
+        // Fallback: 클라이언트 canvas 픽셀 보간
+        setT2Log((p) => [...p, "Canvas 픽셀 보간으로 배경 복원 중..."]);
+        const processed = await removeRegions(screenshot, data.regions, data.backgroundColorHex);
+        setT2ProcessedImg(processed);
+        setT2Log((p) => [...p, "✅ 배경 추출 완료 (픽셀 보간)"]);
+      }
       setT2Status("ok");
     } catch (e) {
       setT2Log((p) => [...p, `❌ 오류: ${e}`]);

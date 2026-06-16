@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import type { AnalysisResult } from "@/lib/types";
 
 const PROMPT = `이것은 한국 카카오톡 대화 스크린샷입니다.
@@ -63,15 +63,21 @@ export async function POST(request: NextRequest) {
 
   let rawText: string;
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    const ai = new GoogleGenAI({ apiKey });
+    const result = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { data: imageBase64, mimeType: validMime } },
+            { text: PROMPT },
+          ],
+        },
+      ],
+    });
 
-    const result = await model.generateContent([
-      { inlineData: { data: imageBase64, mimeType: validMime } },
-      PROMPT,
-    ]);
-
-    rawText = result.response.text().trim();
+    rawText = (result.text ?? "").trim();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
@@ -111,14 +117,12 @@ export async function POST(request: NextRequest) {
     time: m.time || "",
   }));
 
-  // 카카오톡 그룹 시간 전파: 시간이 없는 메시지는 같은 그룹 다음 메시지 시간 사용
-  // (KakaoTalk shows time only on the last bubble of a consecutive group)
+  // 카카오톡 그룹 시간 전파: 시간이 없는 메시지는 다음 메시지 시간으로 채움
   for (let i = parsed.messages.length - 2; i >= 0; i--) {
     if (!parsed.messages[i].time && parsed.messages[i + 1]?.time) {
       parsed.messages[i].time = parsed.messages[i + 1].time;
     }
   }
-  // 마지막 정리: 그래도 빈 time은 기본값
   parsed.messages = parsed.messages.map((m) => ({
     ...m,
     time: m.time || "오전 12:00",

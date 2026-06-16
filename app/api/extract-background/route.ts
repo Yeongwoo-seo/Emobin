@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 export interface Region {
   x: number;
@@ -14,9 +14,10 @@ export interface BackgroundExtractionResult {
   backgroundColorHex: string;
   backgroundType: "solid" | "image";
   regions: Region[];
+  inpaintedBackgroundBase64?: string;
 }
 
-const PROMPT = `이것은 카카오톡 대화 스크린샷입니다.
+const DETECT_PROMPT = `이것은 카카오톡 대화 스크린샷입니다.
 배경화면만 추출하기 위해, 제거해야 할 모든 UI 요소 위치를 JSON으로 반환하세요.
 
 제거 대상:
@@ -43,6 +44,8 @@ const PROMPT = `이것은 카카오톡 대화 스크린샷입니다.
   ]
 }`;
 
+const INPAINT_PROMPT = `이 카카오톡 스크린샷에서 모든 채팅 말풍선, 프로필 사진, 헤더 바, 상태바, 입력창을 완전히 지우고 배경화면만 남겨줘. 말풍선이 있던 자리는 주변 배경과 완전히 자연스럽게 채워줘. 결과는 깨끗한 배경화면 이미지여야 해.`;
+
 export async function POST(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -65,21 +68,29 @@ export async function POST(request: NextRequest) {
       : "image/jpeg"
   ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
+  const ai = new GoogleGenAI({ apiKey });
+
+  // ── Step 1: 영역 탐지 ──
+  let regionResult: BackgroundExtractionResult;
   let rawText: string;
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-
-    const result = await model.generateContent([
-      { inlineData: { data: imageBase64, mimeType: validMime } },
-      PROMPT,
-    ]);
-
-    rawText = result.response.text().trim();
+    const detectResp = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { data: imageBase64, mimeType: validMime } },
+            { text: DETECT_PROMPT },
+          ],
+        },
+      ],
+    });
+    rawText = (detectResp.text ?? "").trim();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: `Gemini API 호출 실패: ${msg}` },
+      { error: `Gemini 영역 탐지 실패: ${msg}` },
       { status: 502 }
     );
   }
@@ -89,18 +100,45 @@ export async function POST(request: NextRequest) {
   const end = rawText.lastIndexOf("}");
   if (start === -1 || end === -1) return NextResponse.json(getMockResult());
 
-  let result: BackgroundExtractionResult;
   try {
-    result = JSON.parse(rawText.slice(start, end + 1));
+    regionResult = JSON.parse(rawText.slice(start, end + 1));
   } catch {
     return NextResponse.json(getMockResult());
   }
 
-  if (!result.backgroundColorHex) result.backgroundColorHex = "#B2C7D9";
-  if (!Array.isArray(result.regions)) result.regions = [];
-  if (!result.backgroundType) result.backgroundType = "solid";
+  if (!regionResult.backgroundColorHex) regionResult.backgroundColorHex = "#B2C7D9";
+  if (!Array.isArray(regionResult.regions)) regionResult.regions = [];
+  if (!regionResult.backgroundType) regionResult.backgroundType = "solid";
 
-  return NextResponse.json(result);
+  // ── Step 2: AI 인페인팅 (Gemini 이미지 생성) ──
+  try {
+    const inpaintResp = await ai.models.generateContent({
+      model: "gemini-2.0-flash-preview-image-generation",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { data: imageBase64, mimeType: validMime } },
+            { text: INPAINT_PROMPT },
+          ],
+        },
+      ],
+      config: {
+        responseModalities: [Modality.IMAGE, Modality.TEXT],
+      },
+    });
+
+    const imagePart = inpaintResp.candidates?.[0]?.content?.parts?.find(
+      (p) => p.inlineData?.data
+    );
+    if (imagePart?.inlineData?.data) {
+      regionResult.inpaintedBackgroundBase64 = imagePart.inlineData.data;
+    }
+  } catch {
+    // AI 인페인팅 실패 시 canvas 보간 fallback (프론트에서 처리)
+  }
+
+  return NextResponse.json(regionResult);
 }
 
 function getMockResult(): BackgroundExtractionResult {
