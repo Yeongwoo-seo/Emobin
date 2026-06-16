@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { fileToDataUrl, dataUrlToBase64, getMimeFromDataUrl, resizeImage, loadImage } from "@/lib/imageUtils";
 import type { AnalysisResult } from "@/lib/types";
@@ -112,6 +112,14 @@ const SENDER_COLORS = {
 export default function TestPage() {
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [imgSize, setImgSize] = useState({ w: 1, h: 1 });
+  const [apiKeyStatus, setApiKeyStatus] = useState<"checking" | "ok" | "missing">("checking");
+
+  useEffect(() => {
+    fetch("/api/check-config")
+      .then((r) => r.json())
+      .then((d) => setApiKeyStatus(d.apiKeySet ? "ok" : "missing"))
+      .catch(() => setApiKeyStatus("missing"));
+  }, []);
 
   /* Test 1 state */
   const [t1Status, setT1Status] = useState<"idle" | "loading" | "ok" | "error">("idle");
@@ -253,6 +261,63 @@ export default function TestPage() {
       </div>
 
       <div className="p-4 max-w-3xl mx-auto space-y-5">
+
+        {/* ═══ API KEY STATUS BANNER ═══ */}
+        {apiKeyStatus === "missing" && (
+          <div className="bg-red-900/40 border border-red-500/50 rounded-2xl p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl flex-shrink-0">🔑</span>
+              <div>
+                <p className="text-red-300 font-bold text-sm mb-1">
+                  ANTHROPIC_API_KEY 미설정 → 지금 샘플 데이터만 반환됩니다
+                </p>
+                <p className="text-red-400/80 text-[11px] mb-3 leading-relaxed">
+                  실제 스크린샷 분석을 하려면 API 키를 설정해야 합니다.
+                </p>
+                <div className="space-y-2">
+                  <div className="bg-black/30 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[11px] font-bold text-gray-300">① API 키 발급</p>
+                    <p className="text-[11px] text-gray-400">
+                      <a
+                        href="https://console.anthropic.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 underline"
+                      >
+                        console.anthropic.com
+                      </a>{" "}
+                      → API Keys → Create Key → <code className="text-yellow-300">sk-ant-...</code> 복사
+                    </p>
+                  </div>
+                  <div className="bg-black/30 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[11px] font-bold text-gray-300">② 로컬 개발 시</p>
+                    <code className="block text-[11px] text-green-300 font-mono bg-black/30 px-2 py-1 rounded">
+                      ANTHROPIC_API_KEY=sk-ant-api03-xxxxx
+                    </code>
+                    <p className="text-[11px] text-gray-500">
+                      → <code>.env.local</code> 파일에 위 내용 추가 후 서버 재시작
+                    </p>
+                  </div>
+                  <div className="bg-black/30 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[11px] font-bold text-gray-300">③ Vercel 배포 시</p>
+                    <p className="text-[11px] text-gray-400">
+                      Vercel 대시보드 → 프로젝트 → Settings → Environment Variables → 추가 → Redeploy
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {apiKeyStatus === "ok" && (
+          <div className="bg-green-900/30 border border-green-500/40 rounded-xl px-4 py-2.5 flex items-center gap-2">
+            <span className="text-green-400">✅</span>
+            <p className="text-green-300 text-[12px] font-semibold">
+              ANTHROPIC_API_KEY 설정됨 — 실제 AI 분석이 실행됩니다
+            </p>
+          </div>
+        )}
 
         {/* ═══ UPLOAD ═══ */}
         <div
