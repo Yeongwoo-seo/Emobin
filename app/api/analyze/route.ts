@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
   let rawText: string;
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const result = await model.generateContent([
       { inlineData: { data: imageBase64, mimeType: validMime } },
