@@ -6,7 +6,7 @@ import { fileToDataUrl, dataUrlToBase64, getMimeFromDataUrl, resizeImage, loadIm
 import type { AnalysisResult } from "@/lib/types";
 import type { BackgroundExtractionResult, Region } from "@/app/api/extract-background/route";
 
-/* ── Canvas: 말풍선/UI 영역 제거 후 배경만 남기기 ── */
+/* ── Canvas: 픽셀 단위 수평 보간으로 배경 복원 (포토샵 AI Fill 방식) ── */
 async function removeRegions(
   dataUrl: string,
   regions: Region[],
@@ -22,58 +22,74 @@ async function removeRegions(
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(img, 0, 0);
 
+  const src = ctx.getImageData(0, 0, W, H);
+  const srcData = src.data;
+
+  // 픽셀 단위 마스크 생성
+  const mask = new Uint8Array(W * H);
   for (const r of regions) {
-    const rx = Math.floor(r.x * W);
-    const ry = Math.floor(r.y * H);
-    const rw = Math.ceil(r.w * W);
-    const rh = Math.ceil(r.h * H);
-
-    // Sample pixels just above and below the region for smooth blend
-    const topY = Math.max(0, ry - 8);
-    const botY = Math.min(H - 1, ry + rh + 8);
-    const midX = Math.min(W - 1, rx + Math.floor(rw / 2));
-
-    const topPx = ctx.getImageData(midX, topY, 1, 1).data;
-    const botPx = ctx.getImageData(midX, botY, 1, 1).data;
-
-    // Decide fill: if sampled pixels look like background, gradient between them
-    // Otherwise fall back to bgColor
-    const parsedBg = hexToRgb(bgColor) ?? { r: 178, g: 199, b: 217 };
-
-    const tR = topPx[3] > 10 ? topPx[0] : parsedBg.r;
-    const tG = topPx[3] > 10 ? topPx[1] : parsedBg.g;
-    const tB = topPx[3] > 10 ? topPx[2] : parsedBg.b;
-    const bR = botPx[3] > 10 ? botPx[0] : parsedBg.r;
-    const bG = botPx[3] > 10 ? botPx[1] : parsedBg.g;
-    const bB = botPx[3] > 10 ? botPx[2] : parsedBg.b;
-
-    const grad = ctx.createLinearGradient(rx, ry, rx, ry + rh);
-    grad.addColorStop(0, `rgb(${tR},${tG},${tB})`);
-    grad.addColorStop(1, `rgb(${bR},${bG},${bB})`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(rx, ry, rw, rh);
+    const x0 = Math.max(0, Math.floor(r.x * W));
+    const y0 = Math.max(0, Math.floor(r.y * H));
+    const x1 = Math.min(W, Math.ceil((r.x + r.w) * W));
+    const y1 = Math.min(H, Math.ceil((r.y + r.h) * H));
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        mask[y * W + x] = 1;
+      }
+    }
   }
 
-  // Light blur pass over removed areas using a simple box blur
-  // (Create a second canvas with blur and composite only removed area)
-  const blurCanvas = document.createElement("canvas");
-  blurCanvas.width = W;
-  blurCanvas.height = H;
-  const blurCtx = blurCanvas.getContext("2d")!;
-  blurCtx.filter = "blur(3px)";
-  blurCtx.drawImage(canvas, 0, 0);
-  blurCtx.filter = "none";
+  const parsedBg = hexToRgb(bgColor) ?? { r: 178, g: 199, b: 217 };
+  const out = new Uint8ClampedArray(srcData);
 
-  // Re-draw over removed regions with blurred version for smooth edges
-  for (const r of regions) {
-    const rx = Math.floor(r.x * W);
-    const ry = Math.floor(r.y * H);
-    const rw = Math.ceil(r.w * W);
-    const rh = Math.ceil(r.h * H);
-    const blurData = blurCtx.getImageData(rx, ry, rw, rh);
-    ctx.putImageData(blurData, rx, ry);
+  // 행별 2-pass: 각 픽셀의 좌/우 비마스크 위치를 미리 계산 후 보간
+  for (let y = 0; y < H; y++) {
+    const leftOf = new Int32Array(W).fill(-1);
+    const rightOf = new Int32Array(W).fill(-1);
+
+    // 왼쪽 pass: 각 x에서 왼쪽으로 가장 가까운 비마스크 픽셀
+    let last = -1;
+    for (let x = 0; x < W; x++) {
+      if (!mask[y * W + x]) last = x;
+      leftOf[x] = last;
+    }
+
+    // 오른쪽 pass: 각 x에서 오른쪽으로 가장 가까운 비마스크 픽셀
+    last = -1;
+    for (let x = W - 1; x >= 0; x--) {
+      if (!mask[y * W + x]) last = x;
+      rightOf[x] = last;
+    }
+
+    for (let x = 0; x < W; x++) {
+      if (!mask[y * W + x]) continue;
+
+      const lx = leftOf[x];
+      const rx = rightOf[x];
+      const i = (y * W + x) * 4;
+
+      if (lx >= 0 && rx >= 0) {
+        // 좌우 비마스크 픽셀 사이를 선형 보간
+        const t = (x - lx) / (rx - lx);
+        const li = (y * W + lx) * 4;
+        const ri = (y * W + rx) * 4;
+        out[i]     = Math.round(srcData[li]     + t * (srcData[ri]     - srcData[li]));
+        out[i + 1] = Math.round(srcData[li + 1] + t * (srcData[ri + 1] - srcData[li + 1]));
+        out[i + 2] = Math.round(srcData[li + 2] + t * (srcData[ri + 2] - srcData[li + 2]));
+        out[i + 3] = 255;
+      } else if (lx >= 0) {
+        const li = (y * W + lx) * 4;
+        out[i] = srcData[li]; out[i+1] = srcData[li+1]; out[i+2] = srcData[li+2]; out[i+3] = 255;
+      } else if (rx >= 0) {
+        const ri = (y * W + rx) * 4;
+        out[i] = srcData[ri]; out[i+1] = srcData[ri+1]; out[i+2] = srcData[ri+2]; out[i+3] = 255;
+      } else {
+        out[i] = parsedBg.r; out[i+1] = parsedBg.g; out[i+2] = parsedBg.b; out[i+3] = 255;
+      }
+    }
   }
 
+  ctx.putImageData(new ImageData(out, W, H), 0, 0);
   return canvas.toDataURL("image/jpeg", 0.92);
 }
 

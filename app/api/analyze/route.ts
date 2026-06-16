@@ -8,7 +8,13 @@ const PROMPT = `이것은 한국 카카오톡 대화 스크린샷입니다.
 - 헤더(상단): 상대방 이름이 중앙에 표시됨
 - 받은 메시지(왼쪽): 상대방 프로필 사진(원형) + 흰색/회색 말풍선
 - 보낸 메시지(오른쪽): 노란색/황색 말풍선
-- 시간: 말풍선 옆에 "오전/오후 H:MM" 형식
+- 시간 표시 규칙(매우 중요):
+  * 같은 발신자가 연속으로 보낸 메시지들은 "그룹"을 형성함
+  * 시간은 그 그룹의 마지막 말풍선 아래/옆에만 딱 한 번 표시됨
+  * 그 그룹의 앞 말풍선들에는 시간이 보이지 않음
+  * 하지만 그 그룹 전체가 동일한 시간을 가짐
+  * 예: A가 3개 연속 보내면 → 3번째 말풍선 옆에 "오전 7:35" → 1,2,3번 모두 "오전 7:35"
+  * 시간이 안 보이는 말풍선 → 같은 그룹(연속 같은 sender)의 마지막 보이는 시간 사용
 
 아래 형식의 순수 JSON만 반환 (코드블록, 설명 없음):
 
@@ -21,16 +27,17 @@ const PROMPT = `이것은 한국 카카오톡 대화 스크린샷입니다.
     "heightPercent": 0.055
   },
   "messages": [
-    {"id": "1", "text": "메시지 내용", "sender": "other", "time": "오후 2:14"}
+    {"id": "1", "text": "메시지 내용", "sender": "other", "time": "오전 7:35"}
   ],
   "backgroundColorHex": "#B2C7D9"
 }
 
 규칙:
-1. messages: 화면 위→아래 순서
+1. messages: 화면 위→아래 순서, 모든 말풍선 빠짐없이 포함
 2. 왼쪽 흰 말풍선 = sender: "other", 오른쪽 노란 말풍선 = sender: "me"
 3. profileBounds: 첫 번째 프로필 사진 위치 (없으면 null)
-4. JSON만 반환`;
+4. 모든 메시지에 time 필드 반드시 포함 (그룹 시간 전파 규칙 적용)
+5. JSON만 반환`;
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -96,11 +103,25 @@ export async function POST(request: NextRequest) {
   if (!parsed.participantName) parsed.participantName = "상대방";
   if (!Array.isArray(parsed.messages)) parsed.messages = [];
   if (!parsed.backgroundColorHex) parsed.backgroundColorHex = "#B2C7D9";
+
   parsed.messages = parsed.messages.map((m, i) => ({
     id: String(i + 1),
     text: m.text || "",
     sender: m.sender === "me" ? "me" : "other",
-    time: m.time || "오후 12:00",
+    time: m.time || "",
+  }));
+
+  // 카카오톡 그룹 시간 전파: 시간이 없는 메시지는 같은 그룹 다음 메시지 시간 사용
+  // (KakaoTalk shows time only on the last bubble of a consecutive group)
+  for (let i = parsed.messages.length - 2; i >= 0; i--) {
+    if (!parsed.messages[i].time && parsed.messages[i + 1]?.time) {
+      parsed.messages[i].time = parsed.messages[i + 1].time;
+    }
+  }
+  // 마지막 정리: 그래도 빈 time은 기본값
+  parsed.messages = parsed.messages.map((m) => ({
+    ...m,
+    time: m.time || "오전 12:00",
   }));
 
   return NextResponse.json({ ...parsed, _source: "gemini" });
